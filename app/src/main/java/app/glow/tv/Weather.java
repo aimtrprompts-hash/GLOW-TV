@@ -50,7 +50,7 @@ final class Weather {
                 + (f ? "fahrenheit" : "celsius")));
         JSONObject cur = w.getJSONObject("current");
         long t = Math.round(cur.getDouble("temperature_2m"));
-        return place + "   ·   " + t + "°" + (f ? "F" : "C") + "  " + describe(cur.getInt("weather_code"));
+        return place + "\n" + t + "°" + (f ? "F" : "C") + "  " + describe(cur.getInt("weather_code"));
     }
 
     private static String get(String url) throws IOException {

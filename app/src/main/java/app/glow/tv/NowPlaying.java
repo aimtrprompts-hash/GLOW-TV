@@ -7,6 +7,7 @@ import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
+import android.os.SystemClock;
 import java.util.List;
 
 /** Watches the system's active media sessions (Spotify, Amazon Music, YouTube Music...). */
@@ -62,6 +63,26 @@ final class NowPlaying {
         PlaybackState s = current.getPlaybackState();
         if (s != null && s.getState() == PlaybackState.STATE_PLAYING) current.getTransportControls().pause();
         else current.getTransportControls().play();
+    }
+
+    void previous() { if (current != null) current.getTransportControls().skipToPrevious(); }
+    void next() { if (current != null) current.getTransportControls().skipToNext(); }
+
+    long duration() {
+        if (current == null) return 0;
+        MediaMetadata m = current.getMetadata();
+        return m == null ? 0 : m.getLong(MediaMetadata.METADATA_KEY_DURATION);
+    }
+
+    long position() {
+        if (current == null) return 0;
+        PlaybackState s = current.getPlaybackState();
+        if (s == null) return 0;
+        long p = s.getPosition();
+        if (s.getState() == PlaybackState.STATE_PLAYING) {
+            p += (long) ((SystemClock.elapsedRealtime() - s.getLastPositionUpdateTime()) * s.getPlaybackSpeed());
+        }
+        return Math.max(0, p);
     }
 
     private void pick(List<MediaController> list) {
