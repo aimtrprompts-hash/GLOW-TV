@@ -1,0 +1,19 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'app.glow.tv'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'app.glow.tv'
+        minSdk 22          // Fire OS 5 / 6 (Android 5.1 / 7.1)
+        targetSdk 28
+        versionCode 1
+        versionName '1.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    lint { abortOnError false }
+}
+// No third-party dependencies on purpose.
