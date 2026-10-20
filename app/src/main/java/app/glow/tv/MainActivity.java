@@ -3,6 +3,7 @@ package app.glow.tv;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -45,12 +46,16 @@ public class MainActivity extends Activity {
     private static final String[] PREFERRED = {"com.netflix.ninja", "com.amazon.firetv.youtube", "com.amazon.avod",
             "com.spotify.tv.android", "com.amazon.music.tv", "org.xbmc.kodi", "com.plexapp.android", "org.videolan.vlc"};
 
+    // Fire TV system tiles that make poor first-run favourites.
+    private static final Set<String> JUNK = new HashSet<>(java.util.Arrays.asList("Home", "Screensaver",
+            "Downloads", "Fire TV Profile UI", "Appstore", "Amazon Kids", "Amazon Live Shopping", "Settings"));
+
     private Prefs prefs;
     private WallpaperView wall;
     private final FrameLayout[] layers = new FrameLayout[4];
     private final ImageView[] topButtons = new ImageView[3];
     private LinearLayout dock, appsList, wallList, settingsList, npCard;
-    private TextView greetView, weatherPlace, weatherTemp, npTitle, npArtist, npTime;
+    private TextView greetView, weatherPlace, weatherTemp, npTitle, npArtist, npTime, npHint;
     private TextClock clock, date;
     private ImageView npArt, npPlay;
     private ProgressLine npBar;
@@ -109,6 +114,7 @@ public class MainActivity extends Activity {
         wall.resume();
         if (dirty) { loadApps(); render(); }
         if (!npStarted) npStarted = nowPlaying.start();
+        updateNpHint();
         updateGreeting();
         h.removeCallbacks(minute);
         h.postDelayed(minute, 60000);
@@ -130,6 +136,11 @@ public class MainActivity extends Activity {
         unregisterReceiver(pkgs);
         nowPlaying.stop();
         h.removeCallbacksAndMessages(null);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent != null && intent.hasCategory(Intent.CATEGORY_HOME) && layer != HOME) showLayer(HOME);
     }
 
     @Override public void onBackPressed() {
@@ -243,6 +254,15 @@ public class MainActivity extends Activity {
         npCard.addView(next, lp(sz(104), sz(104), sz(16), 0, 0, 0));
         bottom.addView(npCard, new LinearLayout.LayoutParams(sz(1300), -2));
 
+        npHint = label("Turn on Now playing  -  press OK", 28, WHITE);
+        npHint.setPadding(sz(32), sz(16), sz(32), sz(16));
+        npHint.setBackground(rect(GLASS, 30));
+        npHint.setFocusable(true);
+        npHint.setClickable(true);
+        npHint.setOnFocusChangeListener((view, focused) -> view.setBackground(rect(focused ? ACCENT : GLASS, 30)));
+        npHint.setOnClickListener(view -> nowPlayingHelp());
+        bottom.addView(npHint, lp(-2, -2, 0, sz(16), 0, 0));
+
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
         hs.setClipChildren(false);
@@ -307,7 +327,7 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
-        box.setPadding(sz(10), sz(10), sz(10), sz(4));
+        box.setPadding(sz(14), sz(10), sz(14), sz(14));
         box.setFocusable(true);
         box.setClickable(true);
         box.setTag(e.pkg);
@@ -327,7 +347,7 @@ public class MainActivity extends Activity {
         boolean hid = hiddenNow.contains(e.pkg);
         if (hid) iv.setAlpha(0.45f);
         frame.addView(iv, new FrameLayout.LayoutParams(sz(w), sz(hgt)));
-        box.addView(frame);
+        box.addView(frame, new LinearLayout.LayoutParams(-2, -2));
         final TextView t = label(e.label + (hid ? "  (hidden)" : ""), 28, WHITE);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.END);
@@ -352,7 +372,7 @@ public class MainActivity extends Activity {
         t.setFocusable(true);
         t.setClickable(true);
         t.setBackground(rect(0x33FFFFFF, 16));
-        t.setLayoutParams(lp(sz(340), sz(191), sz(14), sz(14), sz(14), sz(14)));
+        t.setLayoutParams(lp(sz(340), sz(191), sz(18), sz(14), sz(18), sz(14)));
         t.setOnFocusChangeListener((view, focused) -> {
             pop(view, focused, 1.1f);
             view.setBackground(rect(focused ? ACCENT : 0x33FFFFFF, 16));
@@ -391,6 +411,18 @@ public class MainActivity extends Activity {
             for (String p : PREFERRED) if (have.contains(p)) d.add(p);
             for (int i = 0; d.isEmpty() && i < Math.min(6, all.size()); i++) d.add(all.get(i).pkg);
             prefs.saveList("favs", d);
+        }
+        if (!prefs.has("seeded2")) {
+            List<String> favs = prefs.list("favs");
+            List<String> hid = prefs.list("hidden");
+            List<Apps.Entry> byName = new ArrayList<>(all);
+            Collections.sort(byName, (a, b) -> a.label.compareToIgnoreCase(b.label));
+            for (Apps.Entry e : byName) {
+                if (favs.size() >= 8) break;
+                if (e.banner && !JUNK.contains(e.label) && !favs.contains(e.pkg) && !hid.contains(e.pkg)) favs.add(e.pkg);
+            }
+            prefs.saveList("favs", favs);
+            prefs.put("seeded2", true);
         }
         dirty = false;
     }
@@ -592,6 +624,10 @@ public class MainActivity extends Activity {
         });
         row(settingsList, "Now playing:   " + (npStarted ? "Connected" : "Needs access  (press OK)"),
                 idx -> nowPlayingHelp());
+        row(settingsList, "Open Fire TV settings", idx -> {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+            catch (Exception ex) { toast("Couldn't open Fire TV settings"); }
+        });
         row(settingsList, "Reset pinned and hidden apps", idx -> {
             prefs.remove("favs");
             prefs.remove("hidden");
@@ -616,25 +652,57 @@ public class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null).show();
     }
 
+    private void updateNpHint() { npHint.setVisibility(npStarted ? View.GONE : View.VISIBLE); }
+
+    private void tryStartNowPlaying() {
+        if (!npStarted) npStarted = nowPlaying.start();
+        updateNpHint();
+        if (layer == SETTINGS) buildSettings(-1);
+    }
+
+    /** Works once the one-time ADB permission has been given; otherwise returns false. */
+    private boolean enableListener() {
+        try {
+            String flat = new ComponentName(this, NowPlayingService.class).flattenToString();
+            String cur = android.provider.Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+            if (cur == null || cur.isEmpty()) cur = flat;
+            else if (!cur.contains(flat)) cur = cur + ":" + flat;
+            android.provider.Settings.Secure.putString(getContentResolver(), "enabled_notification_listeners", cur);
+        } catch (SecurityException e) {
+            return false;
+        }
+        toast("Turning on Now playing...");
+        h.postDelayed(() -> tryStartNowPlaying(), 1500);
+        h.postDelayed(() -> tryStartNowPlaying(), 4000);
+        return true;
+    }
+
     private void nowPlayingHelp() {
-        String comp = getPackageName() + "/" + NowPlayingService.class.getName();
-        String msg = npStarted
-                ? "Now playing is connected. Start music in Spotify, Amazon Music or similar and it will appear on Home."
-                : "To show what's playing, Glow needs notification access.\n\nTry \"Open settings\". If your Fire TV has no such screen, run this on your Mac with ADB connected:\n\n"
-                + "adb shell settings get secure enabled_notification_listeners\n\n"
-                + "If that prints a value, put it plus a colon before the component below; if it prints null, use the component alone:\n\n"
-                + "adb shell settings put secure enabled_notification_listeners " + comp;
+        if (npStarted) { toast("Now playing is connected. Play something in Spotify and it will appear on Home."); return; }
+        if (enableListener()) return;
+        String msg = "One-time step needed. On your Mac, with ADB connected to this Firestick, run:\n\n"
+                + "adb shell pm grant " + getPackageName() + " android.permission.WRITE_SECURE_SETTINGS\n\n"
+                + "Then come back here and press OK on Now playing again.";
         new AlertDialog.Builder(this).setTitle("Now playing").setMessage(msg)
-                .setPositiveButton("Open settings", (d, w) -> {
-                    try { startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")); }
-                    catch (Exception ex) { toast("Not available on this device"); }
-                })
+                .setPositiveButton("Try the settings screen", (d, w) -> openAccessSettings())
                 .setNegativeButton("Close", null).show();
+    }
+
+    private void openAccessSettings() {
+        try { startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")); return; }
+        catch (Exception ignored) {}
+        try {
+            startActivity(new Intent().setClassName("com.android.settings",
+                    "com.android.settings.Settings$NotificationAccessSettingsActivity"));
+            return;
+        } catch (Exception ignored) {}
+        toast("This Fire TV has no such screen. Use the ADB step instead.");
     }
 
     // ---------------------------------------------------------------- wallpaper, clock, greeting, weather, progress
 
     private void applyWallpaper() {
+        final boolean first = !prefs.has("wallpaper");
         String key = prefs.str("wallpaper", "g0");
         if (key.startsWith("g")) {
             int i = 0;
@@ -642,6 +710,12 @@ public class MainActivity extends Activity {
             if (i < 0 || i >= WallpaperView.NAMES.length) i = 0;
             wall.setPhoto(null);
             wall.configure(i, prefs.flag("anim", true));
+            if (first) {
+                // First run: try a nice photo from the internet instead of the plain colours.
+                Wallpapers.fetch(this, "https://picsum.photos/1920/1080?random=" + System.currentTimeMillis(), (bmp, err) -> {
+                    if (bmp != null && !prefs.has("wallpaper")) { prefs.put("wallpaper", "photo"); wall.setPhoto(bmp); }
+                });
+            }
         } else {
             Wallpapers.load(this, key, (bmp, err) -> { if (bmp != null) wall.setPhoto(bmp); });
         }

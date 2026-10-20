@@ -22,7 +22,7 @@ final class WallpaperView extends View {
     private static final double[] SPEED = {0.00007, 0.00005, 0.00009};
     private static final double[] PHASE = {0, 2.1, 4.2};
 
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     private final Paint bmpPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Shader[] shaders = new Shader[3];
     private final GradientDrawable topScrim = new GradientDrawable(
