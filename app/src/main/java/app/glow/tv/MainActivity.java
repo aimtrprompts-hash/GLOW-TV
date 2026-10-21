@@ -54,6 +54,8 @@ public class MainActivity extends Activity {
             "Downloads", "Fire TV Profile UI", "Appstore", "Amazon Kids", "Amazon Live Shopping", "Settings"));
 
     private static final long ROTATE_MS = 90000;
+    // Size of the now-playing card: 1.0 = original, smaller = smaller card. Change this one number to taste.
+    private static final float NP_SCALE = 0.3f;
 
     private Prefs prefs;
     private WallpaperView wall;
@@ -228,7 +230,7 @@ public class MainActivity extends Activity {
         // bottom: now-playing card above the app dock
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
-        bottom.addView(buildNowPlayingCard(), new LinearLayout.LayoutParams(sz(1240), -2));
+        bottom.addView(buildNowPlayingCard(), new LinearLayout.LayoutParams(np(1240), -2));
 
         npHint = label("Turn on Now playing  -  press OK", 26, WHITE);
         npHint.setPadding(sz(30), sz(14), sz(30), sz(14));
@@ -785,6 +787,9 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- look & feel helpers
 
+    private int npPx(int px) { return Math.round(px * NP_SCALE); }
+    private int np(int px) { return sz(npPx(px)); }
+
     private boolean extras() { return prefs.flag("extras", false); }
     private boolean iconDock() { return !"tiles".equals(prefs.str("dock", "icons")); }
     private int dockW() { return iconDock() ? 150 : 340; }
@@ -829,59 +834,59 @@ public class MainActivity extends Activity {
 
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(sz(28), sz(28), sz(36), sz(28));
+        row.setPadding(np(28), np(28), np(36), np(28));
 
         npArt = new ImageView(this);
         npArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
         npArt.setBackgroundColor(0x26FFFFFF);
         round(npArt, 26);
-        row.addView(npArt, new LinearLayout.LayoutParams(sz(184), sz(184)));
+        row.addView(npArt, new LinearLayout.LayoutParams(np(184), np(184)));
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        info.setPadding(sz(36), 0, sz(28), 0);
+        info.setPadding(np(36), 0, np(28), 0);
         LinearLayout src = new LinearLayout(this);
         src.setGravity(Gravity.CENTER_VERTICAL);
         npEq = new EqualizerView(this);
-        src.addView(npEq, new LinearLayout.LayoutParams(sz(30), sz(24)));
-        npSource = label("", 21, DIM);
+        src.addView(npEq, new LinearLayout.LayoutParams(np(30), np(24)));
+        npSource = label("", Math.max(npPx(21), 16), DIM);
         npSource.setLetterSpacing(0.18f);
-        src.addView(npSource, lp(-2, -2, sz(14), 0, 0, 0));
-        npTitle = label("", 46, WHITE);
+        src.addView(npSource, lp(-2, -2, np(14), 0, 0, 0));
+        npTitle = label("", Math.max(npPx(46), 22), WHITE);
         npTitle.setTypeface(fMed);
         npTitle.setSingleLine(true);
         npTitle.setEllipsize(TextUtils.TruncateAt.MARQUEE);
         npTitle.setMarqueeRepeatLimit(-1);
         npTitle.setSelected(true);   // keeps a long title scrolling without needing focus
-        npArtist = label("", 30, DIM);
+        npArtist = label("", Math.max(npPx(30), 18), DIM);
         npArtist.setSingleLine(true);
         npArtist.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout barRow = new LinearLayout(this);
         barRow.setGravity(Gravity.CENTER_VERTICAL);
         npBar = new ProgressLine(this);
-        barRow.addView(npBar, new LinearLayout.LayoutParams(0, sz(6), 1f));
-        npTime = label("", 22, DIM);
-        barRow.addView(npTime, lp(-2, -2, sz(20), 0, 0, 0));
+        barRow.addView(npBar, new LinearLayout.LayoutParams(0, np(6), 1f));
+        npTime = label("", Math.max(npPx(22), 16), DIM);
+        barRow.addView(npTime, lp(-2, -2, np(20), 0, 0, 0));
         info.addView(src);
-        info.addView(npTitle, lp(-1, -2, 0, sz(10), 0, 0));
+        info.addView(npTitle, lp(-1, -2, 0, np(10), 0, 0));
         info.addView(npArtist);
-        info.addView(barRow, lp(-1, -2, 0, sz(18), 0, 0));
+        info.addView(barRow, lp(-1, -2, 0, np(18), 0, 0));
         row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
 
         ImageView prev = npButton(R.drawable.ic_prev, 88, false, () -> nowPlaying.previous());
         npPlay = npButton(R.drawable.ic_pause, 112, true, () -> nowPlaying.toggle());
         ImageView next = npButton(R.drawable.ic_next, 88, false, () -> nowPlaying.next());
-        row.addView(prev, lp(sz(88), sz(88), 0, 0, 0, 0));
-        row.addView(npPlay, lp(sz(112), sz(112), sz(18), 0, 0, 0));
-        row.addView(next, lp(sz(88), sz(88), sz(18), 0, 0, 0));
+        row.addView(prev, lp(np(88), np(88), 0, 0, 0, 0));
+        row.addView(npPlay, lp(np(112), np(112), np(18), 0, 0, 0));
+        row.addView(next, lp(np(88), np(88), np(18), 0, 0, 0));
         npCard.addView(row, new FrameLayout.LayoutParams(-1, -2));
 
         // thin glass edge, tinted with the album colour
         View edge = new View(this);
         npBorder = new GradientDrawable();
         npBorder.setColor(0x00000000);
-        npBorder.setCornerRadius(sz(40));
-        npBorder.setStroke(Math.max(2, sz(2)), 0x40FFFFFF);
+        npBorder.setCornerRadius(np(40));
+        npBorder.setStroke(Math.max(2, np(2)), 0x40FFFFFF);
         edge.setBackground(npBorder);
         npCard.addView(edge, match());
         applyAccent(ACCENT);
@@ -891,7 +896,7 @@ public class MainActivity extends Activity {
     private ImageView npButton(int icon, int sizePx, final boolean primary, final Runnable action) {
         final ImageView b = new ImageView(this);
         b.setImageResource(icon);
-        int pad = sz(sizePx / 4);
+        int pad = np(sizePx / 4);
         b.setPadding(pad, pad, pad, pad);
         b.setFocusable(true);
         b.setClickable(true);
