@@ -11,8 +11,11 @@ final class ProgressLine extends View {
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF();
     private float frac;
+    private int fill = 0xFFFFFFFF;
 
     ProgressLine(Context c) { super(c); }
+
+    void setColor(int c) { fill = c; invalidate(); }
 
     void set(float f) {
         if (Math.abs(f - frac) > 0.001f) { frac = f; invalidate(); }
@@ -20,11 +23,11 @@ final class ProgressLine extends View {
 
     @Override protected void onDraw(Canvas c) {
         float w = getWidth(), h = getHeight(), rad = h / 2f;
-        p.setColor(0x55FFFFFF);
+        p.setColor(0x40FFFFFF);
         r.set(0, 0, w, h);
         c.drawRoundRect(r, rad, rad, p);
         if (frac > 0) {
-            p.setColor(0xFFFFFFFF);
+            p.setColor(fill);
             r.set(0, 0, Math.max(h, w * frac), h);
             c.drawRoundRect(r, rad, rad, p);
         }

@@ -2,23 +2,48 @@ package app.glow.tv;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
+import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
-/** Watches the system's active media sessions (Spotify, Amazon Music, YouTube Music...). */
+/** Watches the system's active media sessions (Spotify, Amazon Music, YouTube Music, Bitchord...). */
 final class NowPlaying {
-    interface Listener { void onChange(String title, String artist, Bitmap art, boolean playing); }
+    /** What is playing right now. */
+    static final class Track {
+        String title, artist, album, source;
+        Bitmap art;
+        boolean playing;
+    }
 
+    /** Called with null when nothing is playing. */
+    interface Listener { void onChange(Track t); }
+
+    private static final Handler UI = new Handler(Looper.getMainLooper());
+
+    private final Context ctx;
     private final MediaSessionManager msm;
     private final ComponentName component;
     private final Listener out;
+    private final Map<String, String> appNames = new HashMap<>();
     private MediaController current;
     private boolean started;
+    // Some players give a picture link instead of a picture; it is downloaded once and remembered.
+    private String artUri;
+    private Bitmap uriBitmap;
 
     private final MediaSessionManager.OnActiveSessionsChangedListener sessions =
             new MediaSessionManager.OnActiveSessionsChangedListener() {
@@ -28,10 +53,11 @@ final class NowPlaying {
     private final MediaController.Callback cb = new MediaController.Callback() {
         @Override public void onMetadataChanged(MediaMetadata m) { publish(); }
         @Override public void onPlaybackStateChanged(PlaybackState s) { publish(); }
-        @Override public void onSessionDestroyed() { detach(); out.onChange(null, null, null, false); }
+        @Override public void onSessionDestroyed() { detach(); out.onChange(null); }
     };
 
     NowPlaying(Context c, Listener l) {
+        ctx = c.getApplicationContext();
         msm = (MediaSessionManager) c.getSystemService(Context.MEDIA_SESSION_SERVICE);
         component = new ComponentName(c, NowPlayingService.class);
         out = l;
@@ -100,6 +126,8 @@ final class NowPlaying {
         }
         detach();
         current = best;
+        artUri = null;
+        uriBitmap = null;
         if (current != null) current.registerCallback(cb);
         publish();
     }
@@ -109,7 +137,7 @@ final class NowPlaying {
     }
 
     private void publish() {
-        if (current == null) { out.onChange(null, null, null, false); return; }
+        if (current == null) { out.onChange(null); return; }
         MediaMetadata m = current.getMetadata();
         PlaybackState s = current.getPlaybackState();
         int st = s == null ? PlaybackState.STATE_NONE : s.getState();
@@ -117,12 +145,86 @@ final class NowPlaying {
                 || st == PlaybackState.STATE_BUFFERING;
         String title = m == null ? null : text(m, MediaMetadata.METADATA_KEY_DISPLAY_TITLE,
                 MediaMetadata.METADATA_KEY_TITLE);
-        if (!live || title == null) { out.onChange(null, null, null, false); return; }
-        String artist = text(m, MediaMetadata.METADATA_KEY_ARTIST, MediaMetadata.METADATA_KEY_ALBUM_ARTIST,
+        if (!live || title == null) { out.onChange(null); return; }
+
+        Track t = new Track();
+        t.title = title;
+        t.artist = text(m, MediaMetadata.METADATA_KEY_ARTIST, MediaMetadata.METADATA_KEY_ALBUM_ARTIST,
                 MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
-        Bitmap art = bitmap(m, MediaMetadata.METADATA_KEY_ALBUM_ART, MediaMetadata.METADATA_KEY_ART,
+        t.album = text(m, MediaMetadata.METADATA_KEY_ALBUM);
+        t.playing = st == PlaybackState.STATE_PLAYING;
+        t.source = appName(current.getPackageName());
+        t.art = bitmap(m, MediaMetadata.METADATA_KEY_ALBUM_ART, MediaMetadata.METADATA_KEY_ART,
                 MediaMetadata.METADATA_KEY_DISPLAY_ICON);
-        out.onChange(title, artist, art, st == PlaybackState.STATE_PLAYING);
+        if (t.art != null) {
+            artUri = null;
+            uriBitmap = null;
+        } else {
+            String uri = text(m, MediaMetadata.METADATA_KEY_ALBUM_ART_URI, MediaMetadata.METADATA_KEY_ART_URI,
+                    MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI);
+            if (uri != null) {
+                if (uri.equals(artUri)) t.art = uriBitmap;
+                else { artUri = uri; uriBitmap = null; fetchArt(uri); }
+            }
+        }
+        out.onChange(t);
+    }
+
+    private String appName(String pkg) {
+        if (pkg == null) return null;
+        String n = appNames.get(pkg);
+        if (n == null) {
+            try {
+                PackageManager pm = ctx.getPackageManager();
+                n = String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)));
+            } catch (Exception e) { n = pkg; }
+            appNames.put(pkg, n);
+        }
+        return n;
+    }
+
+    /** Downloads / reads the picture behind a link, then publishes again so the card picks it up. */
+    private void fetchArt(final String uri) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                Bitmap b = null;
+                try { b = decode(uri); } catch (Exception ignored) {} catch (OutOfMemoryError ignored) {}
+                final Bitmap fb = b;
+                UI.post(new Runnable() {
+                    @Override public void run() {
+                        if (fb != null && uri.equals(artUri)) { uriBitmap = fb; publish(); }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private Bitmap decode(String uri) throws Exception {
+        Uri u = Uri.parse(uri);
+        String scheme = u.getScheme() == null ? "" : u.getScheme();
+        boolean web = scheme.equals("http") || scheme.equals("https");
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        InputStream in = open(u, web);
+        BitmapFactory.decodeStream(in, null, o);
+        in.close();
+        int s = 1;
+        while (o.outWidth / (s * 2) >= 600 && o.outHeight / (s * 2) >= 600) s *= 2;
+        BitmapFactory.Options d = new BitmapFactory.Options();
+        d.inSampleSize = s;
+        in = open(u, web);
+        Bitmap b = BitmapFactory.decodeStream(in, null, d);
+        in.close();
+        return b;
+    }
+
+    private InputStream open(Uri u, boolean web) throws Exception {
+        if (!web) return ctx.getContentResolver().openInputStream(u);
+        HttpURLConnection c = (HttpURLConnection) new URL(u.toString()).openConnection();
+        c.setConnectTimeout(8000);
+        c.setReadTimeout(12000);
+        c.setRequestProperty("User-Agent", "GlowTV/1.0");
+        return c.getInputStream();
     }
 
     private static String text(MediaMetadata m, String... keys) {

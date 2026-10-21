@@ -14,10 +14,11 @@ final class Apps {
     static final class Entry {
         final String pkg, label;
         final Intent launch;
-        final Drawable art;
+        final Drawable art, icon;
         final boolean banner;
-        Entry(String pkg, String label, Intent launch, Drawable art, boolean banner) {
+        Entry(String pkg, String label, Intent launch, Drawable art, boolean banner, Drawable icon) {
             this.pkg = pkg; this.label = label; this.launch = launch; this.art = art; this.banner = banner;
+            this.icon = icon;
         }
     }
 
@@ -34,8 +35,9 @@ final class Apps {
                         .setClassName(p, ri.activityInfo.name)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
                 Drawable b = ri.activityInfo.loadBanner(pm);
-                Drawable art = b != null ? b : ri.loadIcon(pm);
-                map.put(p, new Entry(p, String.valueOf(ri.loadLabel(pm)), li, art, b != null));
+                Drawable icon = ri.loadIcon(pm);
+                Drawable art = b != null ? b : icon;
+                map.put(p, new Entry(p, String.valueOf(ri.loadLabel(pm)), li, art, b != null, icon));
             }
         }
         return new ArrayList<>(map.values());

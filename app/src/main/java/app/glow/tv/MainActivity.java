@@ -1,5 +1,6 @@
 package app.glow.tv;
 
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
@@ -8,8 +9,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
@@ -50,27 +53,40 @@ public class MainActivity extends Activity {
     private static final Set<String> JUNK = new HashSet<>(java.util.Arrays.asList("Home", "Screensaver",
             "Downloads", "Fire TV Profile UI", "Appstore", "Amazon Kids", "Amazon Live Shopping", "Settings"));
 
+    private static final long ROTATE_MS = 90000;
+
     private Prefs prefs;
     private WallpaperView wall;
     private final FrameLayout[] layers = new FrameLayout[4];
     private final ImageView[] topButtons = new ImageView[3];
-    private LinearLayout dock, appsList, wallList, settingsList, npCard;
-    private TextView greetView, weatherPlace, weatherTemp, npTitle, npArtist, npTime, npHint;
+    private LinearLayout dock, appsList, wallList, settingsList;
+    private FrameLayout npCard;
+    private TextView greetView, weatherPlace, weatherTemp, npTitle, npArtist, npSource, npTime, npHint;
     private TextClock clock, date;
-    private ImageView npArt, npPlay;
+    private ImageView npArt, npBlur, npPlay;
     private ProgressLine npBar;
+    private EqualizerView npEq;
+    private GradientDrawable npBorder;
+    private ValueAnimator accentAnim;
+    private Bitmap npArtShown;
+    private NowPlaying.Track npLast;
+    private int npAccent = ACCENT;
+    private Typeface fLight, fReg, fMed;
     private NowPlaying nowPlaying;
     private List<Apps.Entry> all = new ArrayList<>();
     private List<String> hiddenNow = new ArrayList<>();
     private boolean npStarted, dirty, resumed;
-    private int layer, minutes;
+    private int layer, minutes, rotateIdx;
     private long lastWeather;
     private final Handler h = new Handler(Looper.getMainLooper());
 
+    private final Runnable rotateTask = new Runnable() {
+        @Override public void run() { rotateNext(false); }
+    };
     private final Runnable minute = new Runnable() {
         @Override public void run() {
             updateGreeting();
-            if (++minutes % 30 == 0) fetchWeather();
+            if (++minutes % 30 == 0 && extras()) fetchWeather();
             h.postDelayed(this, 60000);
         }
     };
@@ -86,16 +102,9 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = new Prefs(this);
+        loadFonts();
         buildUi();
-        nowPlaying = new NowPlaying(this, (title, artist, art, playing) -> {
-            if (title == null) { npCard.setVisibility(View.GONE); return; }
-            npCard.setVisibility(View.VISIBLE);
-            npTitle.setText(title);
-            npArtist.setText(artist == null ? "" : artist);
-            npArt.setImageBitmap(art);
-            npPlay.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
-            updateProgress();
-        });
+        nowPlaying = new NowPlaying(this, t -> showTrack(t));
         IntentFilter f = new IntentFilter();
         f.addAction(Intent.ACTION_PACKAGE_ADDED);
         f.addAction(Intent.ACTION_PACKAGE_REMOVED);
@@ -120,7 +129,9 @@ public class MainActivity extends Activity {
         h.postDelayed(minute, 60000);
         h.removeCallbacks(progress);
         h.post(progress);
-        if (System.currentTimeMillis() - lastWeather > 20 * 60 * 1000L) fetchWeather();
+        if (extras() && System.currentTimeMillis() - lastWeather > 20 * 60 * 1000L) fetchWeather();
+        h.removeCallbacks(rotateTask);
+        if ("rotate".equals(prefs.str("wallpaper", ""))) h.postDelayed(rotateTask, ROTATE_MS);
     }
 
     @Override protected void onPause() {
@@ -129,6 +140,7 @@ public class MainActivity extends Activity {
         wall.pause();
         h.removeCallbacks(minute);
         h.removeCallbacks(progress);
+        h.removeCallbacks(rotateTask);
     }
 
     @Override protected void onDestroy() {
@@ -165,31 +177,32 @@ public class MainActivity extends Activity {
         }
         FrameLayout home = layers[HOME];
 
-        // top-left: greeting, big clock, date
+        // top-left: a quiet clock and date (the greeting only shows when "Greeting & weather" is on)
         LinearLayout tl = new LinearLayout(this);
         tl.setOrientation(LinearLayout.VERTICAL);
-        greetView = label("", 30, DIM);
-        greetView.setLetterSpacing(0.12f);
+        greetView = label("", 24, DIM);
+        greetView.setLetterSpacing(0.16f);
         clock = new TextClock(this);
-        clock.setTextSize(TypedValue.COMPLEX_UNIT_PX, sz(160));
+        clock.setTextSize(TypedValue.COMPLEX_UNIT_PX, sz(132));
         clock.setTextColor(WHITE);
-        clock.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        clock.setShadowLayer(sz(8), 0, sz(2), 0x99000000);
+        clock.setTypeface(fLight);
+        clock.setShadowLayer(sz(10), 0, sz(2), 0x66000000);
         clock.setIncludeFontPadding(false);
         date = new TextClock(this);
-        date.setTextSize(TypedValue.COMPLEX_UNIT_PX, sz(38));
+        date.setTextSize(TypedValue.COMPLEX_UNIT_PX, sz(32));
         date.setTextColor(DIM);
-        date.setShadowLayer(sz(6), 0, sz(2), 0x99000000);
+        date.setTypeface(fReg);
+        date.setShadowLayer(sz(6), 0, sz(2), 0x66000000);
         date.setFormat12Hour("EEEE, d MMMM");
         date.setFormat24Hour("EEEE, d MMMM");
         tl.addView(greetView);
         tl.addView(clock);
-        tl.addView(date);
+        tl.addView(date, lp(-2, -2, sz(4), sz(2), 0, 0));
         FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         tlp.setMargins(sz(96), sz(56), 0, 0);
         home.addView(tl, tlp);
 
-        // top-right: three round buttons, then location + weather
+        // top-right: three small round buttons, then (optionally) location + weather
         LinearLayout tr = new LinearLayout(this);
         tr.setOrientation(LinearLayout.VERTICAL);
         tr.setGravity(Gravity.END);
@@ -197,84 +210,47 @@ public class MainActivity extends Activity {
         int[] icons = {R.drawable.ic_apps, R.drawable.ic_wallpaper, R.drawable.ic_settings};
         for (int i = 0; i < 3; i++) {
             final int target = i + 1;
-            ImageView bt = roundButton(icons[i], 96, () -> showLayer(target));
+            ImageView bt = roundButton(icons[i], 80, () -> showLayer(target));
             topButtons[i] = bt;
-            btns.addView(bt, lp(sz(96), sz(96), i == 0 ? 0 : sz(20), 0, 0, 0));
+            btns.addView(bt, lp(sz(80), sz(80), i == 0 ? 0 : sz(18), 0, 0, 0));
         }
-        weatherPlace = label("", 34, WHITE);
+        weatherPlace = label("", 30, WHITE);
         weatherPlace.setGravity(Gravity.END);
-        weatherTemp = label("", 28, DIM);
+        weatherTemp = label("", 26, DIM);
         weatherTemp.setGravity(Gravity.END);
         tr.addView(btns, lp(-2, -2, 0, 0, 0, 0));
-        tr.addView(weatherPlace, lp(-2, -2, 0, sz(28), 0, 0));
+        tr.addView(weatherPlace, lp(-2, -2, 0, sz(24), 0, 0));
         tr.addView(weatherTemp, lp(-2, -2, 0, 0, 0, 0));
         FrameLayout.LayoutParams trp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        trp.setMargins(0, sz(48), sz(96), 0);
+        trp.setMargins(0, sz(52), sz(96), 0);
         home.addView(tr, trp);
 
         // bottom: now-playing card above the app dock
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
+        bottom.addView(buildNowPlayingCard(), new LinearLayout.LayoutParams(sz(1240), -2));
 
-        npCard = new LinearLayout(this);
-        npCard.setGravity(Gravity.CENTER_VERTICAL);
-        npCard.setPadding(sz(24), sz(24), sz(32), sz(24));
-        npCard.setBackground(rect(GLASS, 40));
-        npCard.setVisibility(View.GONE);
-        npArt = new ImageView(this);
-        npArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        npArt.setBackgroundColor(0x33FFFFFF);
-        round(npArt, 22);
-        npCard.addView(npArt, new LinearLayout.LayoutParams(sz(168), sz(168)));
-        LinearLayout info = new LinearLayout(this);
-        info.setOrientation(LinearLayout.VERTICAL);
-        info.setPadding(sz(32), 0, sz(24), 0);
-        npTitle = label("", 44, WHITE);
-        npTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        npArtist = label("", 32, DIM);
-        for (TextView t : new TextView[]{npTitle, npArtist}) {
-            t.setSingleLine(true);
-            t.setEllipsize(TextUtils.TruncateAt.END);
-        }
-        LinearLayout barRow = new LinearLayout(this);
-        barRow.setGravity(Gravity.CENTER_VERTICAL);
-        npBar = new ProgressLine(this);
-        barRow.addView(npBar, new LinearLayout.LayoutParams(0, sz(8), 1f));
-        npTime = label("", 24, DIM);
-        barRow.addView(npTime, lp(-2, -2, sz(20), 0, 0, 0));
-        info.addView(npTitle);
-        info.addView(npArtist);
-        info.addView(barRow, lp(-1, -2, 0, sz(16), 0, 0));
-        npCard.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
-        ImageView prev = roundButton(R.drawable.ic_prev, 104, () -> nowPlaying.previous());
-        npPlay = roundButton(R.drawable.ic_pause, 104, () -> nowPlaying.toggle());
-        ImageView next = roundButton(R.drawable.ic_next, 104, () -> nowPlaying.next());
-        npCard.addView(prev, lp(sz(104), sz(104), 0, 0, 0, 0));
-        npCard.addView(npPlay, lp(sz(104), sz(104), sz(16), 0, 0, 0));
-        npCard.addView(next, lp(sz(104), sz(104), sz(16), 0, 0, 0));
-        bottom.addView(npCard, new LinearLayout.LayoutParams(sz(1300), -2));
-
-        npHint = label("Turn on Now playing  -  press OK", 28, WHITE);
-        npHint.setPadding(sz(32), sz(16), sz(32), sz(16));
-        npHint.setBackground(rect(GLASS, 30));
+        npHint = label("Turn on Now playing  -  press OK", 26, WHITE);
+        npHint.setPadding(sz(30), sz(14), sz(30), sz(14));
+        npHint.setBackground(glass(30));
         npHint.setFocusable(true);
         npHint.setClickable(true);
-        npHint.setOnFocusChangeListener((view, focused) -> view.setBackground(rect(focused ? ACCENT : GLASS, 30)));
+        npHint.setOnFocusChangeListener((view, focused) -> view.setBackground(focused ? rect(ACCENT, 30) : glass(30)));
         npHint.setOnClickListener(view -> nowPlayingHelp());
-        bottom.addView(npHint, lp(-2, -2, 0, sz(16), 0, 0));
+        bottom.addView(npHint, lp(-2, -2, 0, sz(14), 0, 0));
 
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
         hs.setClipChildren(false);
         hs.setClipToPadding(false);
-        hs.setPadding(sz(24), sz(20), sz(24), sz(10));
-        hs.setBackground(rect(GLASS, 44));
+        hs.setPadding(sz(20), sz(18), sz(20), sz(8));
+        hs.setBackground(glass(40));
         dock = new LinearLayout(this);
         dock.setClipChildren(false);
         hs.addView(dock);
-        bottom.addView(hs, lp(-1, -2, 0, sz(24), 0, 0));
+        bottom.addView(hs, lp(-1, -2, 0, sz(22), 0, 0));
         FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        bp.setMargins(sz(80), 0, sz(80), sz(48));
+        bp.setMargins(sz(96), 0, sz(96), sz(52));
         home.addView(bottom, bp);
 
         // full-screen panels
@@ -323,7 +299,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    private View card(final Apps.Entry e, final boolean alwaysLabel, int w, int hgt) {
+    private View card(final Apps.Entry e, final boolean alwaysLabel, int w, int hgt, boolean useIcon) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -333,31 +309,32 @@ public class MainActivity extends Activity {
         box.setTag(e.pkg);
         final FrameLayout frame = new FrameLayout(this);
         frame.setPadding(sz(4), sz(4), sz(4), sz(4));
-        frame.setBackground(rect(0x00FFFFFF, 20));
+        frame.setBackground(ring(false, 22));
         ImageView iv = new ImageView(this);
-        iv.setImageDrawable(e.art);
-        round(iv, 16);
-        if (e.banner) {
+        iv.setImageDrawable(useIcon ? e.icon : e.art);
+        round(iv, 18);
+        if (!useIcon && e.banner) {
             iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         } else {
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            iv.setBackgroundColor(0x33FFFFFF);
-            iv.setPadding(sz(w / 4), sz(hgt / 6), sz(w / 4), sz(hgt / 6));
+            iv.setBackgroundColor(0x26FFFFFF);
+            int px = useIcon ? w / 7 : w / 4, py = useIcon ? hgt / 7 : hgt / 6;
+            iv.setPadding(sz(px), sz(py), sz(px), sz(py));
         }
         boolean hid = hiddenNow.contains(e.pkg);
         if (hid) iv.setAlpha(0.45f);
         frame.addView(iv, new FrameLayout.LayoutParams(sz(w), sz(hgt)));
         box.addView(frame, new LinearLayout.LayoutParams(-2, -2));
-        final TextView t = label(e.label + (hid ? "  (hidden)" : ""), 28, WHITE);
+        final TextView t = label(e.label + (hid ? "  (hidden)" : ""), 26, WHITE);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.END);
-        t.setMaxWidth(sz(w));
+        t.setMaxWidth(sz(Math.max(w, 190)));
         t.setGravity(Gravity.CENTER);
         t.setAlpha(alwaysLabel ? 0.85f : 0f);
         box.addView(t, lp(-2, -2, 0, sz(8), 0, 0));
         box.setOnFocusChangeListener((view, focused) -> {
-            pop(view, focused, 1.1f);
-            frame.setBackground(rect(focused ? 0xFFFFFFFF : 0x00FFFFFF, 20));
+            pop(view, focused, 1.08f);
+            frame.setBackground(ring(focused, 22));
             if (alwaysLabel) t.setAlpha(focused ? 1f : 0.85f);
             else t.animate().alpha(focused ? 1f : 0f).setDuration(120).start();
         });
@@ -367,15 +344,26 @@ public class MainActivity extends Activity {
     }
 
     private View moreTile() {
-        TextView t = label("All apps", 34, WHITE);
-        t.setGravity(Gravity.CENTER);
+        View t;
+        if (iconDock()) {
+            ImageView iv = new ImageView(this);
+            iv.setImageResource(R.drawable.ic_apps);
+            iv.setColorFilter(WHITE);
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            iv.setPadding(sz(44), sz(44), sz(44), sz(44));
+            t = iv;
+        } else {
+            TextView tv = label("All apps", 32, WHITE);
+            tv.setGravity(Gravity.CENTER);
+            t = tv;
+        }
         t.setFocusable(true);
         t.setClickable(true);
-        t.setBackground(rect(0x33FFFFFF, 16));
-        t.setLayoutParams(lp(sz(340), sz(191), sz(18), sz(14), sz(18), sz(14)));
+        t.setBackground(rect(0x26FFFFFF, 18));
+        t.setLayoutParams(lp(sz(dockW()), sz(dockH()), sz(18), sz(14), sz(18), sz(14)));
         t.setOnFocusChangeListener((view, focused) -> {
-            pop(view, focused, 1.1f);
-            view.setBackground(rect(focused ? ACCENT : 0x33FFFFFF, 16));
+            pop(view, focused, 1.08f);
+            view.setBackground(focused ? ring(true, 18) : rect(0x26FFFFFF, 18));
         });
         t.setOnClickListener(view -> showLayer(APPS));
         return t;
@@ -434,7 +422,7 @@ public class MainActivity extends Activity {
         dock.removeAllViews();
         for (String p : prefs.list("favs")) {
             Apps.Entry e = by.get(p);
-            if (e != null && !hiddenNow.contains(p)) dock.addView(card(e, false, 340, 191));
+            if (e != null && !hiddenNow.contains(p)) dock.addView(card(e, false, dockW(), dockH(), iconDock()));
         }
         dock.addView(moreTile());
 
@@ -449,7 +437,7 @@ public class MainActivity extends Activity {
                 row.setClipChildren(false);
                 appsList.addView(row);
             }
-            row.addView(card(e, true, 296, 167));
+            row.addView(card(e, true, 296, 167, false));
         }
     }
 
@@ -570,6 +558,13 @@ public class MainActivity extends Activity {
                 buildWall(idx);
             });
         }
+        if (Wallpapers.assetNames(this).size() > 1) {
+            row(wallList, mark(cur, "rotate") + "Rotate through all my photos  (every 90 seconds)", idx -> {
+                prefs.put("wallpaper", "rotate");
+                applyWallpaper();
+                buildWall(idx);
+            });
+        }
         focusRow(wallList, focus);
     }
 
@@ -582,7 +577,7 @@ public class MainActivity extends Activity {
     private void onPhoto(Bitmap bmp, String err, int idx) {
         if (bmp == null) { toast("Couldn't use that photo" + (err == null ? "" : ": " + err)); return; }
         prefs.put("wallpaper", "photo");
-        wall.setPhoto(bmp);
+        wall.setPhoto(bmp, true);
         if (layer == WALL) buildWall(idx);
     }
 
@@ -602,14 +597,14 @@ public class MainActivity extends Activity {
 
     private void buildSettings(int focus) {
         settingsList.removeAllViews();
-        String name = prefs.str("name", ""), city = prefs.str("city", "");
-        row(settingsList, "Your name:   " + (name.isEmpty() ? "not set" : name),
-                idx -> ask("Your name", "name", idx, false));
-        row(settingsList, "Weather city:   " + (city.isEmpty() ? "Automatic (from your internet connection)" : city),
-                idx -> ask("City (leave empty for automatic)", "city", idx, true));
-        row(settingsList, "Temperature:   " + (prefs.flag("f", false) ? "Fahrenheit" : "Celsius"), idx -> {
-            prefs.put("f", !prefs.flag("f", false));
-            fetchWeather();
+        row(settingsList, "Dock style:   " + (iconDock() ? "Icons" : "Tiles"), idx -> {
+            prefs.put("dock", iconDock() ? "tiles" : "icons");
+            render();
+            buildSettings(idx);
+        });
+        row(settingsList, "Moving wallpapers:   " + onOff(prefs.flag("anim", true)), idx -> {
+            prefs.put("anim", !prefs.flag("anim", true));
+            applyWallpaper();
             buildSettings(idx);
         });
         row(settingsList, "24-hour clock:   " + onOff(prefs.flag("h24", false)), idx -> {
@@ -617,11 +612,24 @@ public class MainActivity extends Activity {
             applyPrefs();
             buildSettings(idx);
         });
-        row(settingsList, "Moving colour wallpapers:   " + onOff(prefs.flag("anim", true)), idx -> {
-            prefs.put("anim", !prefs.flag("anim", true));
-            applyWallpaper();
+        row(settingsList, "Greeting & weather:   " + onOff(extras()), idx -> {
+            prefs.put("extras", !extras());
+            applyPrefs();
+            if (extras()) fetchWeather();
             buildSettings(idx);
         });
+        if (extras()) {
+            String name = prefs.str("name", ""), city = prefs.str("city", "");
+            row(settingsList, "Your name:   " + (name.isEmpty() ? "not set" : name),
+                    idx -> ask("Your name", "name", idx, false));
+            row(settingsList, "Weather city:   " + (city.isEmpty() ? "Automatic (from your internet connection)" : city),
+                    idx -> ask("City (leave empty for automatic)", "city", idx, true));
+            row(settingsList, "Temperature:   " + (prefs.flag("f", false) ? "Fahrenheit" : "Celsius"), idx -> {
+                prefs.put("f", !prefs.flag("f", false));
+                fetchWeather();
+                buildSettings(idx);
+            });
+        }
         row(settingsList, "Now playing:   " + (npStarted ? "Connected" : "Needs access  (press OK)"),
                 idx -> nowPlayingHelp());
         row(settingsList, "Open Fire TV settings", idx -> {
@@ -702,6 +710,8 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- wallpaper, clock, greeting, weather, progress
 
     private void applyWallpaper() {
+        h.removeCallbacks(rotateTask);
+        wall.setAnimated(prefs.flag("anim", true));
         final boolean first = !prefs.has("wallpaper");
         String key = prefs.str("wallpaper", "g0");
         if (key.startsWith("g")) {
@@ -713,12 +723,26 @@ public class MainActivity extends Activity {
             if (first) {
                 // First run: try a nice photo from the internet instead of the plain colours.
                 Wallpapers.fetch(this, "https://picsum.photos/1920/1080?random=" + System.currentTimeMillis(), (bmp, err) -> {
-                    if (bmp != null && !prefs.has("wallpaper")) { prefs.put("wallpaper", "photo"); wall.setPhoto(bmp); }
+                    if (bmp != null && !prefs.has("wallpaper")) { prefs.put("wallpaper", "photo"); wall.setPhoto(bmp, true); }
                 });
             }
+        } else if (key.equals("rotate")) {
+            rotateNext(true);
         } else {
-            Wallpapers.load(this, key, (bmp, err) -> { if (bmp != null) wall.setPhoto(bmp); });
+            Wallpapers.load(this, key, (bmp, err) -> { if (bmp != null) wall.setPhoto(bmp, true); });
         }
+    }
+
+    /** Shows the next of "my photos" and schedules the one after it. */
+    private void rotateNext(final boolean instant) {
+        List<String> names = Wallpapers.assetNames(this);
+        if (names.isEmpty()) return;
+        String k = "asset:" + names.get(rotateIdx++ % names.size());
+        Wallpapers.load(this, k, (bmp, err) -> {
+            if (bmp != null && "rotate".equals(prefs.str("wallpaper", ""))) wall.setPhoto(bmp, !instant);
+        });
+        h.removeCallbacks(rotateTask);
+        if (resumed || instant) h.postDelayed(rotateTask, ROTATE_MS);
     }
 
     private void applyPrefs() {
@@ -726,6 +750,7 @@ public class MainActivity extends Activity {
         clock.setFormat12Hour(f);
         clock.setFormat24Hour(f);
         updateGreeting();
+        applyExtras();
     }
 
     private void updateGreeting() {
@@ -736,6 +761,7 @@ public class MainActivity extends Activity {
     }
 
     private void fetchWeather() {
+        if (!extras()) return;
         lastWeather = System.currentTimeMillis();
         Weather.fetch(prefs.str("city", ""), prefs.flag("f", false), text -> {
             if (text.isEmpty()) return;
@@ -757,6 +783,231 @@ public class MainActivity extends Activity {
         return (s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60);
     }
 
+    // ---------------------------------------------------------------- look & feel helpers
+
+    private boolean extras() { return prefs.flag("extras", false); }
+    private boolean iconDock() { return !"tiles".equals(prefs.str("dock", "icons")); }
+    private int dockW() { return iconDock() ? 150 : 340; }
+    private int dockH() { return iconDock() ? 150 : 191; }
+
+    private void applyExtras() {
+        int v = extras() ? View.VISIBLE : View.GONE;
+        greetView.setVisibility(v);
+        weatherPlace.setVisibility(v);
+        weatherTemp.setVisibility(v);
+    }
+
+    /** Uses Manrope if you drop Manrope-Light/Regular/Medium.ttf into assets/fonts, otherwise the system fonts. */
+    private void loadFonts() {
+        fLight = font("Light", Typeface.create("sans-serif-light", Typeface.NORMAL));
+        fReg = font("Regular", Typeface.create("sans-serif", Typeface.NORMAL));
+        fMed = font("Medium", Typeface.create("sans-serif-medium", Typeface.NORMAL));
+    }
+
+    private Typeface font(String weight, Typeface fallback) {
+        try { return Typeface.createFromAsset(getAssets(), "fonts/Manrope-" + weight + ".ttf"); }
+        catch (Exception e) { return fallback; }
+    }
+
+    // ---------------------------------------------------------------- now-playing card
+
+    private View buildNowPlayingCard() {
+        npCard = new FrameLayout(this);
+        npCard.setVisibility(View.GONE);
+        npCard.setBackgroundColor(0xFF0C0C12);
+        round(npCard, 40);
+
+        // soft colour wash taken from the album art, dimmed so the text stays readable
+        npBlur = new ImageView(this);
+        npBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        npBlur.setAlpha(0.7f);
+        npCard.addView(npBlur, match());
+        View shade = new View(this);
+        shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0x660A0A12, 0xAD0A0A12}));
+        npCard.addView(shade, match());
+
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(sz(28), sz(28), sz(36), sz(28));
+
+        npArt = new ImageView(this);
+        npArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        npArt.setBackgroundColor(0x26FFFFFF);
+        round(npArt, 26);
+        row.addView(npArt, new LinearLayout.LayoutParams(sz(184), sz(184)));
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(sz(36), 0, sz(28), 0);
+        LinearLayout src = new LinearLayout(this);
+        src.setGravity(Gravity.CENTER_VERTICAL);
+        npEq = new EqualizerView(this);
+        src.addView(npEq, new LinearLayout.LayoutParams(sz(30), sz(24)));
+        npSource = label("", 21, DIM);
+        npSource.setLetterSpacing(0.18f);
+        src.addView(npSource, lp(-2, -2, sz(14), 0, 0, 0));
+        npTitle = label("", 46, WHITE);
+        npTitle.setTypeface(fMed);
+        npTitle.setSingleLine(true);
+        npTitle.setEllipsize(TextUtils.TruncateAt.MARQUEE);
+        npTitle.setMarqueeRepeatLimit(-1);
+        npTitle.setSelected(true);   // keeps a long title scrolling without needing focus
+        npArtist = label("", 30, DIM);
+        npArtist.setSingleLine(true);
+        npArtist.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout barRow = new LinearLayout(this);
+        barRow.setGravity(Gravity.CENTER_VERTICAL);
+        npBar = new ProgressLine(this);
+        barRow.addView(npBar, new LinearLayout.LayoutParams(0, sz(6), 1f));
+        npTime = label("", 22, DIM);
+        barRow.addView(npTime, lp(-2, -2, sz(20), 0, 0, 0));
+        info.addView(src);
+        info.addView(npTitle, lp(-1, -2, 0, sz(10), 0, 0));
+        info.addView(npArtist);
+        info.addView(barRow, lp(-1, -2, 0, sz(18), 0, 0));
+        row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        ImageView prev = npButton(R.drawable.ic_prev, 88, false, () -> nowPlaying.previous());
+        npPlay = npButton(R.drawable.ic_pause, 112, true, () -> nowPlaying.toggle());
+        ImageView next = npButton(R.drawable.ic_next, 88, false, () -> nowPlaying.next());
+        row.addView(prev, lp(sz(88), sz(88), 0, 0, 0, 0));
+        row.addView(npPlay, lp(sz(112), sz(112), sz(18), 0, 0, 0));
+        row.addView(next, lp(sz(88), sz(88), sz(18), 0, 0, 0));
+        npCard.addView(row, new FrameLayout.LayoutParams(-1, -2));
+
+        // thin glass edge, tinted with the album colour
+        View edge = new View(this);
+        npBorder = new GradientDrawable();
+        npBorder.setColor(0x00000000);
+        npBorder.setCornerRadius(sz(40));
+        npBorder.setStroke(Math.max(2, sz(2)), 0x40FFFFFF);
+        edge.setBackground(npBorder);
+        npCard.addView(edge, match());
+        applyAccent(ACCENT);
+        return npCard;
+    }
+
+    private ImageView npButton(int icon, int sizePx, final boolean primary, final Runnable action) {
+        final ImageView b = new ImageView(this);
+        b.setImageResource(icon);
+        int pad = sz(sizePx / 4);
+        b.setPadding(pad, pad, pad, pad);
+        b.setFocusable(true);
+        b.setClickable(true);
+        styleNp(b, primary, false);
+        b.setOnFocusChangeListener((view, focused) -> {
+            pop(view, focused, 1.1f);
+            styleNp(b, primary, focused);
+        });
+        b.setOnClickListener(view -> action.run());
+        return b;
+    }
+
+    private void styleNp(ImageView b, boolean primary, boolean focused) {
+        b.setBackground(circle(focused ? WHITE : primary ? npAccent : 0x33FFFFFF));
+        b.setColorFilter(focused || primary ? 0xFF0B0B10 : WHITE);
+    }
+
+    private void showTrack(NowPlaying.Track t) {
+        if (t == null) {
+            npLast = null;
+            npEq.setPlaying(false);
+            if (npCard.getVisibility() == View.VISIBLE) {
+                npCard.animate().cancel();
+                npCard.animate().alpha(0f).translationY(sz(20)).setDuration(220).withEndAction(() -> {
+                    if (npLast == null) npCard.setVisibility(View.GONE);
+                }).start();
+            }
+            return;
+        }
+        npLast = t;
+        npTitle.setText(t.title);
+        String line = t.artist == null ? "" : t.artist;
+        if (t.album != null && !t.album.equals(t.title)) line = line.isEmpty() ? t.album : line + "  \u00B7  " + t.album;
+        npArtist.setText(line);
+        String src = t.source == null ? "" : t.source.toUpperCase();
+        npSource.setText(t.playing ? src : (src.isEmpty() ? "PAUSED" : src + "  \u00B7  PAUSED"));
+        npEq.setPlaying(t.playing);
+        npPlay.setImageResource(t.playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        if (t.art != npArtShown) {
+            npArtShown = t.art;
+            npArt.setImageBitmap(t.art);
+            if (t.art != null) {
+                try { npBlur.setImageBitmap(tiny(t.art)); } catch (RuntimeException e) { npBlur.setImageDrawable(null); }
+                animateAccent(accentOf(t.art));
+            } else {
+                npBlur.setImageDrawable(null);
+                animateAccent(ACCENT);
+            }
+        }
+        if (npCard.getVisibility() != View.VISIBLE) {
+            npCard.setAlpha(0f);
+            npCard.setTranslationY(sz(20));
+            npCard.setVisibility(View.VISIBLE);
+        }
+        if (npCard.getAlpha() < 1f || npCard.getTranslationY() != 0f) {
+            npCard.animate().cancel();
+            npCard.animate().alpha(1f).translationY(0f).setDuration(280).start();
+        }
+        updateProgress();
+    }
+
+    /** A 10x10 copy of the art; stretched up it becomes a soft blur for almost no cost. */
+    private static Bitmap tiny(Bitmap b) {
+        Bitmap mid = Bitmap.createScaledBitmap(b, 48, 48, true);
+        return Bitmap.createScaledBitmap(mid, 10, 10, true);
+    }
+
+    /** Picks the most colourful, reasonably bright colour in the art. */
+    private static int accentOf(Bitmap src) {
+        try {
+            Bitmap s = Bitmap.createScaledBitmap(src, 24, 24, true);
+            float[] hsv = new float[3];
+            float[] wgt = new float[12], sr = new float[12], sg = new float[12], sb = new float[12];
+            for (int y = 0; y < 24; y++) {
+                for (int x = 0; x < 24; x++) {
+                    int p = s.getPixel(x, y);
+                    Color.colorToHSV(p, hsv);
+                    if (hsv[1] < 0.2f || hsv[2] < 0.25f) continue;
+                    int k = Math.min(11, (int) (hsv[0] / 30f));
+                    float w = hsv[1] * hsv[2];
+                    wgt[k] += w;
+                    sr[k] += Color.red(p) * w;
+                    sg[k] += Color.green(p) * w;
+                    sb[k] += Color.blue(p) * w;
+                }
+            }
+            int best = -1;
+            for (int k = 0; k < 12; k++) if (wgt[k] > 0 && (best < 0 || wgt[k] > wgt[best])) best = k;
+            if (best < 0) return 0xFF9AA0B8;   // grey / black-and-white art
+            int c = Color.rgb(Math.round(sr[best] / wgt[best]), Math.round(sg[best] / wgt[best]),
+                    Math.round(sb[best] / wgt[best]));
+            Color.colorToHSV(c, hsv);
+            hsv[1] = Math.max(hsv[1], 0.45f);
+            hsv[2] = Math.min(0.95f, Math.max(hsv[2], 0.7f));
+            return Color.HSVToColor(hsv);
+        } catch (RuntimeException e) {
+            return ACCENT;
+        }
+    }
+
+    private void animateAccent(int to) {
+        if (accentAnim != null) accentAnim.cancel();
+        accentAnim = ValueAnimator.ofArgb(npAccent, to);
+        accentAnim.setDuration(450);
+        accentAnim.addUpdateListener(a -> applyAccent((Integer) a.getAnimatedValue()));
+        accentAnim.start();
+    }
+
+    private void applyAccent(int c) {
+        npAccent = c;
+        if (npBar != null) npBar.setColor(c);
+        if (npEq != null) npEq.setColor(c);
+        if (npBorder != null) npBorder.setStroke(Math.max(2, sz(2)), (c & 0x00FFFFFF) | 0x66000000);
+        if (npPlay != null && !npPlay.isFocused()) styleNp(npPlay, true, false);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /** All sizes are written for a 1920-pixel-wide screen and scaled to the real one. */
@@ -767,7 +1018,8 @@ public class MainActivity extends Activity {
         t.setText(s);
         t.setTextSize(TypedValue.COMPLEX_UNIT_PX, sz(px));
         t.setTextColor(color);
-        t.setShadowLayer(sz(6), 0, sz(2), 0x99000000);
+        t.setTypeface(fReg);
+        t.setShadowLayer(sz(5), 0, sz(1), 0x66000000);
         return t;
     }
 
@@ -783,6 +1035,24 @@ public class MainActivity extends Activity {
         GradientDrawable g = new GradientDrawable();
         g.setColor(color);
         g.setCornerRadius(sz(radiusPx));
+        return g;
+    }
+
+    /** Focus ring for app tiles: a soft white outline with a faint fill. */
+    private GradientDrawable ring(boolean focused, int radiusPx) {
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(sz(radiusPx));
+        g.setColor(focused ? 0x26FFFFFF : 0x00FFFFFF);
+        if (focused) g.setStroke(Math.max(2, sz(3)), 0xF2FFFFFF);
+        return g;
+    }
+
+    /** Frosted-glass panel: dark translucent fill with a hairline edge. */
+    private GradientDrawable glass(int radiusPx) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0x80101018);
+        g.setCornerRadius(sz(radiusPx));
+        g.setStroke(Math.max(1, sz(2)), 0x24FFFFFF);
         return g;
     }
 
